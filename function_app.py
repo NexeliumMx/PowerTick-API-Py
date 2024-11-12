@@ -42,7 +42,7 @@ def testDBconnection(req: func.HttpRequest) -> func.HttpResponse:
             connection = psycopg2.connect(
                 host=os.getenv("PGHOST"),
                 dbname=os.getenv("PGDATABASE"),
-                user="PowerTick-API-JS",  # Use the managed identity name as the user
+                user="PowerTick-API-Py",  # Use the managed identity name as the user
                 password=token,  # Access token as the password
                 sslmode="require"  # Enforce SSL for secure connection
             )
