@@ -1,8 +1,8 @@
 import azure.functions as func
 import logging
-import os
-import psycopg2
-from azure.identity import DefaultAzureCredential
+from dbClient import DBClient
+import csv
+import io
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -31,24 +31,18 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
 def testDBconnection(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Processing database connection test request.')
 
-    # Function to connect to the PostgreSQL database
+    # Create an instance of DBClient
+    db_client = DBClient()
+
+    # Function to connect to the database and test the connection
     def connect_to_database():
         try:
-            # Use DefaultAzureCredential to authenticate with managed identity
-            credential = DefaultAzureCredential()
-            token = credential.get_token("https://ossrdbms-aad.database.windows.net").token
-
-            # Database connection parameters
-            connection = psycopg2.connect(
-                host=os.getenv("PGHOST"),
-                dbname=os.getenv("PGDATABASE"),
-                user="PowerTick-API-Py",  # Use the managed identity name as the user
-                password=token,  # Access token as the password
-                sslmode="require"  # Enforce SSL for secure connection
-            )
+            # Get a database connection
+            connection = db_client.get_connection()
 
             # Test connection by opening and closing immediately
             connection.close()
+            db_client.close_connection()
             return {"success": True, "message": "Connection to database successful."}
 
         except Exception as e:
@@ -63,3 +57,50 @@ def testDBconnection(req: func.HttpRequest) -> func.HttpResponse:
         mimetype="application/json",
         status_code=200
     )
+
+
+
+
+@app.route(route="downloadModbusRTUcsv", auth_level=func.AuthLevel.ANONYMOUS)
+def downloadModbusRTUcsv(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("Processing request to download modbusrtu_commands table as CSV.")
+
+    # Initialize database client
+    db_client = DBClient()
+
+    try:
+        # Establish database connection
+        connection = db_client.get_connection()
+        cursor = connection.cursor()
+
+        # Query all data from the modbusrtu_commands table
+        cursor.execute("SELECT * FROM public.modbusrtu_commands")
+        rows = cursor.fetchall()
+
+        # Get column names
+        column_names = [desc[0] for desc in cursor.description]
+
+        # Generate CSV in-memory
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(column_names)  # Write headers
+        writer.writerows(rows)  # Write data rows
+
+        # Close database connection
+        db_client.close_connection()
+
+        # Create HTTP response with CSV file
+        response = func.HttpResponse(
+            body=output.getvalue(),
+            mimetype="text/csv",
+            status_code=200,
+        )
+        response.headers["Content-Disposition"] = "attachment; filename=modbusrtu_commands.csv"
+        return response
+
+    except Exception as e:
+        logging.error(f"Error downloading CSV: {e}")
+        return func.HttpResponse(
+            body=f"Failed to generate CSV: {str(e)}",
+            status_code=500
+        )
