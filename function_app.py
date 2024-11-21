@@ -27,6 +27,30 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
              status_code=200
         )
 
+"""
+Author: Arturo Vargas Cuevas
+Last Modified Date: 2024-11-20
+
+This function serves as an HTTP GET endpoint to test the database connection 
+for the PowerTick API. It verifies if the API can successfully connect to the 
+PostgreSQL database using the configured authentication method.
+
+Authentication Methods:
+- Local: Traditional username/password authentication (for local development).
+- Cloud: Token-based authentication using Azure Managed Identity (for production).
+
+Example:
+Test the database connection locally:
+curl -X GET "http://localhost:7071/api/testDBconnection"
+
+Test the database connection in the cloud:
+curl -X GET "https://powertick-api-py.azurewebsites.net/api/testDBconnection"
+
+Response:
+- Success: {'success': True, 'message': 'Connection to database successful.'}
+- Failure: {'success': False, 'message': 'Connection to database failed: <error>'}
+"""
+
 @app.route(route="testDBconnection", auth_level=func.AuthLevel.ANONYMOUS)
 def testDBconnection(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Processing database connection test request.')
@@ -60,6 +84,23 @@ def testDBconnection(req: func.HttpRequest) -> func.HttpResponse:
 
 
 
+"""
+Author: Arturo Vargas Cuevas
+Last Modified Date: 2024-11-20
+
+This function serves as an HTTP GET endpoint to generate and download all data 
+from the `modbusrtu_commands` table in the PostgreSQL database as a CSV file.
+ 
+The data is queried dynamically from the database, converted into CSV format 
+in-memory, and returned as a downloadable file in the HTTP response.
+
+Example:
+Download the modbusrtu_commands table locally:
+curl -O -J "http://localhost:7071/api/downloadModbusRTUcsv"
+
+Download the modbusrtu_commands table in the cloud:
+curl -O -J "https://powertick-api-py.azurewebsites.net/api/downloadModbusRTUcsv"
+"""
 
 @app.route(route="downloadModbusRTUcsv", auth_level=func.AuthLevel.ANONYMOUS)
 def downloadModbusRTUcsv(req: func.HttpRequest) -> func.HttpResponse:

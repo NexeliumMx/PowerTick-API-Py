@@ -1,3 +1,29 @@
+"""
+Author: Arturo Vargas Cuevas
+Last Modified Date: 2024-11-21
+
+This module provides a database client for connecting to a PostgreSQL database. 
+It supports two environments:
+- **Local Development**: Uses traditional username/password authentication.
+- **Azure Environment**: Implements token-based authentication with Azure Managed Identity.
+
+Key Features:
+- Handles dynamic environment detection (`local` or `cloud`) to determine the authentication method.
+- Uses `DefaultAzureCredential` to retrieve authentication tokens for Azure.
+- Provides methods to establish (`get_connection`) and close (`close_connection`) database connections.
+- Ensures secure connections by enforcing SSL for all environments.
+
+Conditions for the Code to Work:
+- Environment variables (`PGHOST`, `PGDATABASE`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `ENVIRONMENT`) must be correctly set.
+- For Azure, the Function App must have a System-Assigned Managed Identity enabled and access permissions to the PostgreSQL server.
+- A valid token must be retrievable from Azure Managed Identity in the cloud environment.
+
+Usage:
+- Create an instance of the `DBClient` class.
+- Call `get_connection` to obtain a database connection.
+- Always call `close_connection` after completing database operations to release resources.
+"""
+
 import os
 import psycopg2
 from azure.identity import DefaultAzureCredential
