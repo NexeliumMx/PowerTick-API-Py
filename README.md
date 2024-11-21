@@ -2,7 +2,7 @@
 # PowerTick Python API Documentation
 
 ## Overview
-The PowerTick Python API is built with Azure Functions and provides endpoints to interact with Modbus RTU commands and database testing. This documentation outlines all available endpoints, their purposes, and how to interact with them.
+The PowerTick Python API is built with Azure Functions and provides endpoints to interact with Modbus RTU commands, generate measurement data, and test database connections. This documentation outlines all available endpoints, their purposes, and how to interact with them.
 
 ---
 
@@ -13,6 +13,18 @@ The PowerTick Python API is built with Azure Functions and provides endpoints to
 | **Endpoint**                | **Method** | **Description**                                          |
 |-----------------------------|------------|----------------------------------------------------------|
 | `/api/downloadModbusRTUcsv` | GET        | Download the `modbusrtu_commands` table as a CSV file.   |
+
+### Dev API Endpoints
+
+| **Endpoint**                          | **Method** | **Description**                                         |
+|---------------------------------------|------------|---------------------------------------------------------|
+| `/api/generate_demo_measurements_csv` | GET        | Generate and download demo measurements as a CSV file.  |
+
+### Demo API Endpoints
+
+| **Endpoint**                          | **Method** | **Description**                                         |
+|---------------------------------------|------------|---------------------------------------------------------|
+| `/api/generate_dev_measurements_csv`  | GET        | Generate and download dev measurements as a CSV file.   |
 
 ### Test API Endpoints
 
@@ -78,6 +90,32 @@ Below are examples of how to interact with each API endpoint using `curl`.
 
 ---
 
+### `/api/generate_demo_measurements_csv` - GET
+
+**Description**: Generate and download demo measurements as a CSV file.
+
+**Examples**:
+
+- **Download locally**:
+  ```bash
+  curl -O -J "http://localhost:7071/api/demoGenerateMeasurementsCSV?sn=DEMO0000001&year=2024&month=11"
+  ```
+
+---
+
+### `/api/generate_dev_measurements_csv` - GET
+
+**Description**: Generate and download dev measurements as a CSV file.
+
+**Examples**:
+
+- **Download locally**:
+  ```bash
+  curl -O -J "http://localhost:7071/api/generateMeasurementsCSV?sn=DEMO0000001&year=2024&month=11"
+  ```
+
+---
+
 ### `/api/http_trigger` - GET, POST
 
 **Description**: Sample trigger for testing.
@@ -111,7 +149,3 @@ Below are examples of how to interact with each API endpoint using `curl`.
   ```bash
   curl -X GET "https://powertick-api-py.azurewebsites.net/api/testDBconnection"
   ```
-
----
-
-Feel free to modify the example parameters as needed for testing purposes.

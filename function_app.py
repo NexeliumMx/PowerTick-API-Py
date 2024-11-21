@@ -145,3 +145,228 @@ def downloadModbusRTUcsv(req: func.HttpRequest) -> func.HttpResponse:
             body=f"Failed to generate CSV: {str(e)}",
             status_code=500
         )
+    
+"""
+Author: Arturo Vargas Cuevas
+Last Modified Date: 2024-11-21
+
+Objective:
+This function serves as an HTTP GET endpoint to generate a downloadable CSV file
+containing all measurements for a specified powermeter, year, and month. It retrieves
+the time zone of the powermeter from the database and uses it to filter measurements
+based on the provided year and month. If no data exists for the given criteria, an
+appropriate error message is returned.
+
+Steps:
+1. Retrieve the time zone of the powermeter from the `powermeters` table.
+2. Filter the `measurements` table using the provided serial number (`sn`), year, and month.
+3. Use the powermeter's time zone to accurately filter data.
+4. Generate a CSV file dynamically and return it as a downloadable response.
+
+Example:
+Request measurements for serial number `DEMO0000001` for October 2024:
+Local environment:
+curl -O -J "http://localhost:7071/api/generateMeasurementsCSV?sn=DEMO0000001&year=2024&month=10"
+
+Cloud environment:
+curl -O -J "https://powertick-api-py.azurewebsites.net/api/generateMeasurementsCSV?sn=DEMO0000001&year=2024&month=10"
+"""
+
+@app.route(route="generateMeasurementsCSV", auth_level=func.AuthLevel.ANONYMOUS)
+def generate_dev_measurements_csv(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("Processing request to generate measurements CSV.")
+
+    # Retrieve query parameters
+    serial_number = req.params.get('sn')  # Changed to 'sn' as requested
+    year = req.params.get('year')
+    month = req.params.get('month')
+
+    # Validate inputs
+    if not serial_number or not year or not month:
+        return func.HttpResponse(
+            "Please provide 'sn' (serial number), 'year', and 'month' as query parameters.",
+            status_code=400
+        )
+
+    try:
+        # Initialize database client
+        db_client = DBClient()
+        connection = db_client.get_connection()
+        cursor = connection.cursor()
+
+        # Step 1: Retrieve the timezone for the serial number
+        cursor.execute(
+            """
+            SELECT "time_zone"
+            FROM "dev"."powermeters"
+            WHERE "serial_number" = %s
+            """,
+            (serial_number,)
+        )
+        timezone_result = cursor.fetchone()
+
+        if not timezone_result:
+            return func.HttpResponse(
+                f"Serial number '{serial_number}' not found in the database.",
+                status_code=404
+            )
+
+        # Retrieve the timezone
+        time_zone = timezone_result[0]
+
+        # Step 2: Construct the date range for the specified year and month
+        start_date = f"{year}-{month}-01 00:00:00"
+        next_month = int(month) % 12 + 1
+        next_month_year = int(year) + 1 if next_month == 1 else int(year)
+        end_date = f"{next_month_year}-{next_month:02d}-01 00:00:00"
+
+        # Step 3: Retrieve measurements with updated query
+        cursor.execute(
+            f"""
+            SELECT 
+              "timestamp" AT TIME ZONE %s AS timestamp_in_powermeter_time_zone,
+              *
+            FROM "dev"."measurements"
+            WHERE "serial_number" = %s
+              AND "timestamp" AT TIME ZONE %s >= %s
+              AND "timestamp" AT TIME ZONE %s < %s
+              AND "timestamp" < NOW()
+            ORDER BY "timestamp" ASC
+            """,
+            (time_zone, serial_number, time_zone, start_date, time_zone, end_date)
+        )
+        rows = cursor.fetchall()
+
+        if not rows:
+            return func.HttpResponse(
+                f"No measurements found for serial number '{serial_number}' in {year}-{month}.",
+                status_code=404
+            )
+
+        # Step 4: Get column names
+        column_names = [desc[0] for desc in cursor.description]
+
+        # Step 5: Generate CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(column_names)  # Write headers
+        writer.writerows(rows)  # Write data rows
+
+        # Close database connection
+        db_client.close_connection()
+
+        # Step 6: Create HTTP response with CSV file
+        response = func.HttpResponse(
+            body=output.getvalue(),
+            mimetype="text/csv",
+            status_code=200
+        )
+        response.headers["Content-Disposition"] = f"attachment; filename=measurements_{serial_number}_{year}_{month}.csv"
+        return response
+
+    except Exception as e:
+        logging.error(f"Error generating measurements CSV: {e}")
+        return func.HttpResponse(
+            f"Failed to generate measurements CSV: {str(e)}",
+            status_code=500
+        )
+    
+
+@app.route(route="demoGenerateMeasurementsCSV", auth_level=func.AuthLevel.ANONYMOUS)
+def generate_demo_measurements_csv(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("Processing request to generate measurements CSV.")
+
+    # Retrieve query parameters
+    serial_number = req.params.get('sn')  # Changed to 'sn' as requested
+    year = req.params.get('year')
+    month = req.params.get('month')
+
+    # Validate inputs
+    if not serial_number or not year or not month:
+        return func.HttpResponse(
+            "Please provide 'sn' (serial number), 'year', and 'month' as query parameters.",
+            status_code=400
+        )
+
+    try:
+        # Initialize database client
+        db_client = DBClient()
+        connection = db_client.get_connection()
+        cursor = connection.cursor()
+
+        # Step 1: Retrieve the timezone for the serial number
+        cursor.execute(
+            """
+            SELECT "time_zone"
+            FROM "demo"."powermeters"
+            WHERE "serial_number" = %s
+            """,
+            (serial_number,)
+        )
+        timezone_result = cursor.fetchone()
+
+        if not timezone_result:
+            return func.HttpResponse(
+                f"Serial number '{serial_number}' not found in the database.",
+                status_code=404
+            )
+
+        # Retrieve the timezone
+        time_zone = timezone_result[0]
+
+        # Step 2: Construct the date range for the specified year and month
+        start_date = f"{year}-{month}-01 00:00:00"
+        next_month = int(month) % 12 + 1
+        next_month_year = int(year) + 1 if next_month == 1 else int(year)
+        end_date = f"{next_month_year}-{next_month:02d}-01 00:00:00"
+
+        # Step 3: Retrieve measurements with updated query
+        cursor.execute(
+            f"""
+            SELECT 
+              "timestamp" AT TIME ZONE %s AS timestamp_in_powermeter_time_zone,
+              *
+            FROM "demo"."measurements"
+            WHERE "serial_number" = %s
+              AND "timestamp" AT TIME ZONE %s >= %s
+              AND "timestamp" AT TIME ZONE %s < %s
+              AND "timestamp" < NOW()
+            ORDER BY "timestamp" ASC
+            """,
+            (time_zone, serial_number, time_zone, start_date, time_zone, end_date)
+        )
+        rows = cursor.fetchall()
+
+        if not rows:
+            return func.HttpResponse(
+                f"No measurements found for serial number '{serial_number}' in {year}-{month}.",
+                status_code=404
+            )
+
+        # Step 4: Get column names
+        column_names = [desc[0] for desc in cursor.description]
+
+        # Step 5: Generate CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(column_names)  # Write headers
+        writer.writerows(rows)  # Write data rows
+
+        # Close database connection
+        db_client.close_connection()
+
+        # Step 6: Create HTTP response with CSV file
+        response = func.HttpResponse(
+            body=output.getvalue(),
+            mimetype="text/csv",
+            status_code=200
+        )
+        response.headers["Content-Disposition"] = f"attachment; filename=measurements_{serial_number}_{year}_{month}.csv"
+        return response
+
+    except Exception as e:
+        logging.error(f"Error generating measurements CSV: {e}")
+        return func.HttpResponse(
+            f"Failed to generate measurements CSV: {str(e)}",
+            status_code=500
+        )
