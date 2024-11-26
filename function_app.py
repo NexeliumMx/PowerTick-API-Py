@@ -3,6 +3,9 @@ import logging
 from dbClient import DBClient
 import csv
 import io
+import json
+from azure.storage.blob import BlobServiceClient
+import os
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -369,4 +372,124 @@ def generate_demo_measurements_csv(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             f"Failed to generate measurements CSV: {str(e)}",
             status_code=500
+        )
+    
+
+"""
+Author: Luis Antonio Sánchez Islas
+Last Modified Date: 2024-11-25
+
+Objective:
+This function queries the name and modification date of the released executable file and downloads it in case of being more recent
+than the version available on the local device. GET method queries the release date of the file, while POST method downloads the desire file.
+
+
+Example:
+Request measurements for serial number `DEMO0000001` for October 2024:
+Local environment:
+curl -O -J "http://localhost:7071/api/generateMeasurementsCSV?sn=DEMO0000001&year=2024&month=10"
+
+Cloud environment:
+curl -O -J "https://powertick-api-py.azurewebsites.net/api/generateMeasurementsCSV?sn=DEMO0000001&year=2024&month=10"
+"""
+
+# Azure Storage connection details
+STORAGE_CONNECTION_STRING = os.getenv("STORAGE_CONNECTION_STR")
+CONTAINER_NAME = "powertickupdates"
+
+@app.route(route="versioncheck")
+def versioncheck(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function processed a request.')
+
+    method = req.method
+
+    if method == "GET":
+        try:
+            # Initialize the BlobServiceClient
+            blob_service_client = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+            container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+
+            # Fetch the blob list
+            blob_data_list = []
+            blob_list = container_client.list_blobs()
+
+            for blob in blob_list:
+                blob_data = {
+                    "name": blob.name,
+                    "last_modified": blob.last_modified.isoformat(),
+                    "size_bytes": blob.size
+                }
+                blob_data_list.append(blob_data)
+
+            if not blob_data_list:
+                logging.info("No blobs found in the container.")
+                return func.HttpResponse(
+                    json.dumps({"message": "No blobs found in the container."}),
+                    status_code=404,
+                    mimetype="application/json"
+                )
+
+            # Return blob data as JSON response
+            logging.info("Successfully retrieved blob data.")
+            return func.HttpResponse(
+                json.dumps(blob_data_list),
+                status_code=200,
+                mimetype="application/json"
+            )
+
+        except Exception as e:
+            logging.error(f"An error occurred while fetching blobs: {e}")
+            return func.HttpResponse(
+                json.dumps({"error": "An error occurred while fetching blobs."}),
+                status_code=500,
+                mimetype="application/json"
+            )
+
+    elif method == "POST":
+        try:
+            req_body = req.get_json()
+        except ValueError:
+            return func.HttpResponse(
+                "Invalid POST request. Ensure body contains valid JSON.",
+                status_code=400
+            )
+
+        file_name = req_body.get('file') if req_body else None
+        if file_name:
+            try:
+                # Create a BlobServiceClient object
+                blob_service_client = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+
+                # Get the BlobClient
+                blob_client = blob_service_client.get_blob_client(container=CONTAINER_NAME, blob=file_name)
+
+                # Download the blob content
+                blob_content = blob_client.download_blob().readall()
+
+                return func.HttpResponse(
+                    blob_content,
+                    status_code=200,
+                    mimetype="application/octet-stream"  # Indicating binary data
+                )
+
+            except Exception as e:
+                logging.error(f"An error occurred while downloading the file '{file_name}': {e}")
+                return func.HttpResponse(
+                    json.dumps({"error": "Failed to download the file.", "details": str(e)}),
+                    status_code=500,
+                    mimetype="application/json"
+                )
+        else:
+            return func.HttpResponse(
+                json.dumps({"error": "No file name provided in the request body."}),
+                status_code=400,
+                mimetype="application/json"
+            )
+
+    else:
+        logging.warning(f"Incorrect method used: {method}")
+        return func.HttpResponse(
+            json.dumps({"error": f"Incorrect function call method, use GET or POST method. You used {method}."}),
+            status_code=405,
+            mimetype="application/json"
         )
