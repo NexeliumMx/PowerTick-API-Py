@@ -4,7 +4,6 @@ from dbClient import DBClient
 import csv
 import io
 import json
-from azure.storage.blob import BlobServiceClient
 import os
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
@@ -150,121 +149,117 @@ def downloadModbusRTUcsv(req: func.HttpRequest) -> func.HttpResponse:
         )
     
 """
-Author: Arturo Vargas Cuevas
-Last Modified Date: 2024-11-21
+Author: Arturo Vargas
+Endpoint: GET /api/generateMeasurementsCSV
+Brief: This function generates a CSV file containing measurements for a specific power meter identified by its serial number (sn) for a given year and month. The CSV file includes all measurements recorded in the specified time range, adjusted to the power meter's timezone
+Date: 2025-06-07
 
-Objective:
-This function serves as an HTTP GET endpoint to generate a downloadable CSV file
-containing all measurements for a specified powermeter, year, and month. It retrieves
-the time zone of the powermeter from the database and uses it to filter measurements
-based on the provided year and month. If no data exists for the given criteria, an
-appropriate error message is returned.
+ * Copyright (c) 2025 BY: Nexelium Technological Solutions S.A. de C.V.
+ * All rights reserved.
 
-Steps:
-1. Retrieve the time zone of the powermeter from the `powermeters` table.
-2. Filter the `measurements` table using the provided serial number (`sn`), year, and month.
-3. Use the powermeter's time zone to accurately filter data.
-4. Generate a CSV file dynamically and return it as a downloadable response.
 
-Example:
-Request measurements for serial number `DEMO0000001` for October 2024:
-Local environment:
-curl -O -J "http://localhost:7071/api/generateMeasurementsCSV?sn=DEMO0000001&year=2024&month=10"
-
-Cloud environment:
-curl -O -J "https://powertick-api-py.azurewebsites.net/api/generateMeasurementsCSV?sn=DEMO0000001&year=2024&month=10"
 """
 
 @app.route(route="generateMeasurementsCSV", auth_level=func.AuthLevel.ANONYMOUS)
 def generate_dev_measurements_csv(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info("Processing request to generate measurements CSV.")
+    logging.info("Processing request to generate measurements CSV (reworked endpoint).")
 
-    # Retrieve query parameters
-    serial_number = req.params.get('sn')  # Changed to 'sn' as requested
-    year = req.params.get('year')
-    month = req.params.get('month')
+    # --- Parse and Validate Params ---
+    user_id = req.params.get('user_id')
+    powermeter_id = req.params.get('powermeter_id')
+    start_utc = req.params.get('start_utc')
+    end_utc = req.params.get('end_utc')
+    enviroment = req.params.get('enviroment', 'production')
 
-    # Validate inputs
-    if not serial_number or not year or not month:
+    # Allowed environments
+    ALLOWED_ENVIROMENTS = ['production', 'demo', 'dev']
+    if enviroment not in ALLOWED_ENVIROMENTS:
         return func.HttpResponse(
-            "Please provide 'sn' (serial number), 'year', and 'month' as query parameters.",
+            "Invalid enviroment parameter. Allowed: production, demo, dev.",
+            status_code=400
+        )
+
+    # Schema selection
+    schema = 'public'
+    if enviroment == 'demo':
+        schema = 'demo'
+    elif enviroment == 'dev':
+        schema = 'dev'
+
+    # Validate required parameters
+    if not user_id or not powermeter_id or not start_utc or not end_utc:
+        return func.HttpResponse(
+            "Missing required parameter: user_id, powermeter_id, start_utc, end_utc are required.",
             status_code=400
         )
 
     try:
-        # Initialize database client
         db_client = DBClient()
         connection = db_client.get_connection()
         cursor = connection.cursor()
 
-        # Step 1: Retrieve the timezone for the serial number
-        cursor.execute(
-            """
-            SELECT "time_zone"
-            FROM "dev"."powermeters"
-            WHERE "serial_number" = %s
-            """,
-            (serial_number,)
-        )
-        timezone_result = cursor.fetchone()
-
-        if not timezone_result:
-            return func.HttpResponse(
-                f"Serial number '{serial_number}' not found in the database.",
-                status_code=404
+        # --- Build SQL Query ---
+        sql = f'''
+            WITH authorized_powermeter AS (
+                SELECT p.powermeter_id, p.time_zone
+                FROM {schema}.powermeters p
+                JOIN public.user_installations ui ON p.installation_id = ui.installation_id
+                WHERE ui.user_id = %s
+                  AND p.powermeter_id = %s
+            ),
+            powermeter_info AS (
+                SELECT
+                    powermeter_id,
+                    time_zone,
+                    EXTRACT(hour FROM ('1970-01-01 00:00:00' AT TIME ZONE time_zone)
+                        - '1970-01-01 00:00:00'::timestamp) AS offset_hours
+                FROM authorized_powermeter
+            ),
+            time_window AS (
+                SELECT
+                    powermeter_id,
+                    time_zone,
+                    (%s AT TIME ZONE time_zone) AT TIME ZONE 'UTC' AS start_utc,
+                    (%s AT TIME ZONE time_zone) AT TIME ZONE 'UTC' AS end_utc
+                FROM powermeter_info
             )
-
-        # Retrieve the timezone
-        time_zone = timezone_result[0]
-
-        # Step 2: Construct the date range for the specified year and month
-        start_date = f"{year}-{month}-01 00:00:00"
-        next_month = int(month) % 12 + 1
-        next_month_year = int(year) + 1 if next_month == 1 else int(year)
-        end_date = f"{next_month_year}-{next_month:02d}-01 00:00:00"
-
-        # Step 3: Retrieve measurements with updated query
-        cursor.execute(
-            f"""
-            SELECT 
-              "timestamp" AT TIME ZONE %s AS timestamp_in_powermeter_time_zone,
-              *
-            FROM "dev"."measurements"
-            WHERE "serial_number" = %s
-              AND "timestamp" AT TIME ZONE %s >= %s
-              AND "timestamp" AT TIME ZONE %s < %s
-              AND "timestamp" < NOW()
-            ORDER BY "timestamp" ASC
-            """,
-            (time_zone, serial_number, time_zone, start_date, time_zone, end_date)
-        )
+            SELECT
+                m.*
+            FROM {schema}.measurements m
+            JOIN time_window tw ON m.powermeter_id = tw.powermeter_id
+            WHERE m."timestamp" >= tw.start_utc
+              AND m."timestamp" <  tw.end_utc
+              AND m."timestamp" <= NOW()
+            ORDER BY m."timestamp" ASC;
+        '''
+        params = [user_id, powermeter_id, start_utc, end_utc]
+        cursor.execute(sql, params)
         rows = cursor.fetchall()
 
         if not rows:
             return func.HttpResponse(
-                f"No measurements found for serial number '{serial_number}' in {year}-{month}.",
+                f"No measurements found for powermeter_id '{powermeter_id}' in the specified range.",
                 status_code=404
             )
 
-        # Step 4: Get column names
+        # Get column names
         column_names = [desc[0] for desc in cursor.description]
 
-        # Step 5: Generate CSV
+        # Generate CSV
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(column_names)  # Write headers
-        writer.writerows(rows)  # Write data rows
+        writer.writerow(column_names)
+        writer.writerows(rows)
 
-        # Close database connection
         db_client.close_connection()
 
-        # Step 6: Create HTTP response with CSV file
+        # Create HTTP response with CSV file
         response = func.HttpResponse(
             body=output.getvalue(),
             mimetype="text/csv",
             status_code=200
         )
-        response.headers["Content-Disposition"] = f"attachment; filename=measurements_{serial_number}_{year}_{month}.csv"
+        response.headers["Content-Disposition"] = f"attachment; filename=measurements_{powermeter_id}_{start_utc}_{end_utc}.csv"
         return response
 
     except Exception as e:
@@ -272,224 +267,4 @@ def generate_dev_measurements_csv(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             f"Failed to generate measurements CSV: {str(e)}",
             status_code=500
-        )
-    
-
-@app.route(route="demoGenerateMeasurementsCSV", auth_level=func.AuthLevel.ANONYMOUS)
-def generate_demo_measurements_csv(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info("Processing request to generate measurements CSV.")
-
-    # Retrieve query parameters
-    serial_number = req.params.get('sn')  # Changed to 'sn' as requested
-    year = req.params.get('year')
-    month = req.params.get('month')
-
-    # Validate inputs
-    if not serial_number or not year or not month:
-        return func.HttpResponse(
-            "Please provide 'sn' (serial number), 'year', and 'month' as query parameters.",
-            status_code=400
-        )
-
-    try:
-        # Initialize database client
-        db_client = DBClient()
-        connection = db_client.get_connection()
-        cursor = connection.cursor()
-
-        # Step 1: Retrieve the timezone for the serial number
-        cursor.execute(
-            """
-            SELECT "time_zone"
-            FROM "demo"."powermeters"
-            WHERE "serial_number" = %s
-            """,
-            (serial_number,)
-        )
-        timezone_result = cursor.fetchone()
-
-        if not timezone_result:
-            return func.HttpResponse(
-                f"Serial number '{serial_number}' not found in the database.",
-                status_code=404
-            )
-
-        # Retrieve the timezone
-        time_zone = timezone_result[0]
-
-        # Step 2: Construct the date range for the specified year and month
-        start_date = f"{year}-{month}-01 00:00:00"
-        next_month = int(month) % 12 + 1
-        next_month_year = int(year) + 1 if next_month == 1 else int(year)
-        end_date = f"{next_month_year}-{next_month:02d}-01 00:00:00"
-
-        # Step 3: Retrieve measurements with updated query
-        cursor.execute(
-            f"""
-            SELECT 
-              "timestamp" AT TIME ZONE %s AS timestamp_in_powermeter_time_zone,
-              *
-            FROM "demo"."measurements"
-            WHERE "serial_number" = %s
-              AND "timestamp" AT TIME ZONE %s >= %s
-              AND "timestamp" AT TIME ZONE %s < %s
-              AND "timestamp" < NOW()
-            ORDER BY "timestamp" ASC
-            """,
-            (time_zone, serial_number, time_zone, start_date, time_zone, end_date)
-        )
-        rows = cursor.fetchall()
-
-        if not rows:
-            return func.HttpResponse(
-                f"No measurements found for serial number '{serial_number}' in {year}-{month}.",
-                status_code=404
-            )
-
-        # Step 4: Get column names
-        column_names = [desc[0] for desc in cursor.description]
-
-        # Step 5: Generate CSV
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(column_names)  # Write headers
-        writer.writerows(rows)  # Write data rows
-
-        # Close database connection
-        db_client.close_connection()
-
-        # Step 6: Create HTTP response with CSV file
-        response = func.HttpResponse(
-            body=output.getvalue(),
-            mimetype="text/csv",
-            status_code=200
-        )
-        response.headers["Content-Disposition"] = f"attachment; filename=measurements_{serial_number}_{year}_{month}.csv"
-        return response
-
-    except Exception as e:
-        logging.error(f"Error generating measurements CSV: {e}")
-        return func.HttpResponse(
-            f"Failed to generate measurements CSV: {str(e)}",
-            status_code=500
-        )
-    
-
-"""
-Author: Luis Antonio Sánchez Islas
-Last Modified Date: 2024-11-25
-
-Objective:
-This function queries the name and modification date of the released executable file and downloads it in case of being more recent
-than the version available on the local device. GET method queries the release date of the file, while POST method downloads the desire file.
-
-
-Example:
-Request measurements for serial number `DEMO0000001` for October 2024:
-Local environment:
-curl -O -J "http://localhost:7071/api/generateMeasurementsCSV?sn=DEMO0000001&year=2024&month=10"
-
-Cloud environment:
-curl -O -J "https://powertick-api-py.azurewebsites.net/api/generateMeasurementsCSV?sn=DEMO0000001&year=2024&month=10"
-"""
-
-# Azure Storage connection details
-STORAGE_CONNECTION_STRING = os.getenv("STORAGE_CONNECTION_STR")
-CONTAINER_NAME = "powertickupdates"
-
-@app.route(route="versioncheck")
-def versioncheck(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info('Python HTTP trigger function processed a request.')
-
-    method = req.method
-
-    if method == "GET":
-        try:
-            # Initialize the BlobServiceClient
-            blob_service_client = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-            container_client = blob_service_client.get_container_client(CONTAINER_NAME)
-
-            # Fetch the blob list
-            blob_data_list = []
-            blob_list = container_client.list_blobs()
-
-            for blob in blob_list:
-                blob_data = {
-                    "name": blob.name,
-                    "last_modified": blob.last_modified.isoformat(),
-                    "size_bytes": blob.size
-                }
-                blob_data_list.append(blob_data)
-
-            if not blob_data_list:
-                logging.info("No blobs found in the container.")
-                return func.HttpResponse(
-                    json.dumps({"message": "No blobs found in the container."}),
-                    status_code=404,
-                    mimetype="application/json"
-                )
-
-            # Return blob data as JSON response
-            logging.info("Successfully retrieved blob data.")
-            return func.HttpResponse(
-                json.dumps(blob_data_list),
-                status_code=200,
-                mimetype="application/json"
-            )
-
-        except Exception as e:
-            logging.error(f"An error occurred while fetching blobs: {e}")
-            return func.HttpResponse(
-                json.dumps({"error": "An error occurred while fetching blobs."}),
-                status_code=500,
-                mimetype="application/json"
-            )
-
-    elif method == "POST":
-        try:
-            req_body = req.get_json()
-        except ValueError:
-            return func.HttpResponse(
-                "Invalid POST request. Ensure body contains valid JSON.",
-                status_code=400
-            )
-
-        file_name = req_body.get('file') if req_body else None
-        if file_name:
-            try:
-                # Create a BlobServiceClient object
-                blob_service_client = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-
-                # Get the BlobClient
-                blob_client = blob_service_client.get_blob_client(container=CONTAINER_NAME, blob=file_name)
-
-                # Download the blob content
-                blob_content = blob_client.download_blob().readall()
-
-                return func.HttpResponse(
-                    blob_content,
-                    status_code=200,
-                    mimetype="application/octet-stream"  # Indicating binary data
-                )
-
-            except Exception as e:
-                logging.error(f"An error occurred while downloading the file '{file_name}': {e}")
-                return func.HttpResponse(
-                    json.dumps({"error": "Failed to download the file.", "details": str(e)}),
-                    status_code=500,
-                    mimetype="application/json"
-                )
-        else:
-            return func.HttpResponse(
-                json.dumps({"error": "No file name provided in the request body."}),
-                status_code=400,
-                mimetype="application/json"
-            )
-
-    else:
-        logging.warning(f"Incorrect method used: {method}")
-        return func.HttpResponse(
-            json.dumps({"error": f"Incorrect function call method, use GET or POST method. You used {method}."}),
-            status_code=405,
-            mimetype="application/json"
         )
